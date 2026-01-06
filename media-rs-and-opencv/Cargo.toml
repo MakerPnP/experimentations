@@ -13,11 +13,6 @@ opencv-411 = [
     "opencv"
 ]
 
-linux = [
-    # required to avoid compilation error: "a `libclang` shared library is not loaded on this thread"
-    "opencv/clang-runtime"
-]
-
 [dependencies]
 # Computer Vision and Image Processing
 opencv           = { version = "0.97.2", features = ["imgcodecs", "imgproc", "objdetect"], default-features = false, optional = true }
@@ -40,5 +35,9 @@ log              = { version = "0.4.28", features = ["release_max_level_debug"] 
 
 # Serialization and Deserialization
 serde            = { version = "1.0.228", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# required to avoid compilation error: "a `libclang` shared library is not loaded on this thread"
+opencv = { workspace = true, features = ["clang-runtime"], optional = true }
 
 [dev-dependencies]

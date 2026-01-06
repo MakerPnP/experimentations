@@ -7,10 +7,6 @@ edition = "2024"
 opencv-410 = []
 opencv-411 = []
 default = ["opencv-411"]
-linux = [
-    # required to avoid compilation error: "a `libclang` shared library is not loaded on this thread"
-    "opencv/clang-runtime"
-]
 
 [dependencies]
 # Computer Vision and Image Processing
@@ -35,5 +31,9 @@ log              = { version = "0.4.28", features = ["release_max_level_debug"] 
 serde            = { version = "1.0.228", features = ["derive"] }
 
 x-media          = { version = "0.1.3" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# required to avoid compilation error: "a `libclang` shared library is not loaded on this thread"
+opencv = { workspace = true, features = ["clang-runtime"], optional = true }
 
 [dev-dependencies]
