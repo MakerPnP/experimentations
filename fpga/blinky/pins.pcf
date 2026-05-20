@@ -1,0 +1,8 @@
+### main ###
+set_io  TCXO H16
+
+### blink ###
+set_io  FPGA_ACT E6
+
+
+
