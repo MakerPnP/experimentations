@@ -3,12 +3,12 @@
 # yosys+nextpnr
 
 PROJECT  := blink
-TOP      := blink
+TOP      := blink_top
 TB       := blink_tb
 FAMILY   := ice40
 TYPE     := hx8k
 PACKAGE  := ct256
-VERILOGS := blink.v
+VERILOGS := blink_top.v blink.v pll.v
 TB_VLOGS := blink.v blink_tb.v
 
 FLASH_ALGO_ROOT := ../../../../dev-tools/makerpnpcore-w25q16jv

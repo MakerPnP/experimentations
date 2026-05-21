@@ -3,15 +3,17 @@
 module blink_tb;
 
     // Testbench signals
-    reg TCXO = 1;
+    reg TCXO = 0;
     wire FPGA_ACT;
+    reg RESET = 1;
 
     // Instantiate your design (DUT = Device Under Test)
     blink #(
         .SPEED(10)   // small number for fast simulation
     ) dut (
-        .TCXO(TCXO),
-        .FPGA_ACT(FPGA_ACT)
+        .clk(TCXO),
+        .reset(RESET),
+        .led(FPGA_ACT)
     );
 
     // Clock generation: 100 MHz simulated clock (10ns period)
@@ -21,6 +23,11 @@ module blink_tb;
     initial begin
         $dumpfile("blink.vcd");
         $dumpvars(0, blink_tb);
+
+        // reset pulse
+        RESET = 1;
+        #20;
+        RESET = 0;
 
         // Run simulation for some time
         #500;

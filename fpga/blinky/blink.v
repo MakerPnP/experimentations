@@ -1,24 +1,25 @@
 module blink
     #(parameter SPEED = 100000)
     (
-        input TCXO,
-        output FPGA_ACT
+        input clk,
+        input reset,
+        output reg led = 0
     );
-    reg rled;
-    reg [31:0] counter;
-    assign FPGA_ACT = rled;
 
-    initial begin
-        counter = 0;
-        rled = 0;
-    end
+reg [31:0] counter = 0;
 
-    always @(posedge TCXO) begin
+always @(posedge clk) begin
+    if (reset) begin
+        counter <= 0;
+        led <= 0;
+    end else begin
         if (counter == SPEED) begin
-            rled <= ~rled;
+            led <= ~led;
             counter <= 1;
         end else begin
             counter <= counter + 1;
         end
     end
+end
+
 endmodule
