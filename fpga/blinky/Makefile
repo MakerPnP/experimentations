@@ -11,6 +11,8 @@ PACKAGE  := ct256
 VERILOGS := blink.v
 TB_VLOGS := blink.v blink_tb.v
 
+FLASH_ALGO_ROOT := ../../../../dev-tools/makerpnpcore-w25q16jv
+
 all: \
 	$(PROJECT).bin \
 	sim
@@ -56,4 +58,4 @@ clean:
 # -------------------------
 
 load: $(PROJECT).bin
-	 iceFUNprog $(PROJECT).bin
+	 probe-rs download --chip makerpnpcore-w25q16jv --chip-description-path $(FLASH_ALGO_ROOT)/target/definition.yaml $(PROJECT).bin --binary-format=bin --base-address 0x70000000 --verify
