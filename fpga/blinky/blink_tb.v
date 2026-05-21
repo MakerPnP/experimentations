@@ -30,7 +30,7 @@ module blink_tb;
         RESET = 0;
 
         // Run simulation for some time
-        #500;
+        #2500;
 
         $finish;
     end
