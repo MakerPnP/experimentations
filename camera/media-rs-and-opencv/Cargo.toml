@@ -1,0 +1,43 @@
+[package]
+name = "media-rs-and-opencv"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+
+opencv-410 = [
+    "opencv"
+]
+opencv-411 = [
+    "opencv"
+]
+
+[dependencies]
+# Computer Vision and Image Processing
+opencv           = { version = "0.97.2", features = ["imgcodecs", "imgproc", "objdetect"], default-features = false, optional = true }
+# currently need a version of media-rs with linux support (via libcamera 0.6.0)
+media            = { git = "https://github.com/MakerPnP/media-rs", rev = "91a2d8e9bf2f1d5dd0462f7e5dd78222c95412e8" }
+#media           = { path = "../../../media-rs/media" }
+image            = { version = "0.25.8" }
+
+# GUI Framework and User Interface
+egui             = { version = "0.33.0", features = ["persistence"] }
+eframe           = { version = "0.33.2", features = ["ron", "serde", "persistence"] }
+egui_ltreeview   = { version = "0.6.0", features = ["persistence"] }
+
+# Time and Date Handling
+chrono           = { version = "0.4.42" }
+
+# Logging and Debugging
+env_logger       = { version = "0.11.8" }
+log              = { version = "0.4.28", features = ["release_max_level_debug"] }
+
+# Serialization and Deserialization
+serde            = { version = "1.0.228", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# required to avoid compilation error: "a `libclang` shared library is not loaded on this thread"
+opencv = { workspace = true, features = ["clang-runtime"], optional = true }
+
+[dev-dependencies]
