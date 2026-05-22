@@ -11,7 +11,7 @@ PACKAGE  := ct256
 VERILOGS := blink_top.v blink.v pll.v
 TB_VLOGS := blink.v blink_tb.v
 
-FLASH_ALGO_ROOT := ../../../../dev-tools/makerpnpcore-w25q16jv
+FLASH_ALGO_ROOT := ../../../dev-tools/makerpnpcore-w25q16jv
 
 all: \
 	$(PROJECT).bin \
