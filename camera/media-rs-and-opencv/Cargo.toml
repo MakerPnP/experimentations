@@ -38,6 +38,6 @@ serde            = { version = "1.0.228", features = ["derive"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # required to avoid compilation error: "a `libclang` shared library is not loaded on this thread"
-opencv = { workspace = true, features = ["clang-runtime"], optional = true }
+opencv = { version = "0.97.2", features = ["clang-runtime"], optional = true }
 
 [dev-dependencies]

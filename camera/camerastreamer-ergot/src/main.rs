@@ -97,7 +97,7 @@ pub struct CameraFrame {
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
-    if !check_camera_permission() {
+    if !camera_permissions_request_required() {
         request_camera_permission();
     }
 
@@ -197,12 +197,12 @@ fn check_camera_permission() -> bool {
             authorizationStatusForMediaType: &*av_media_type
         ];
 
-        status == 3
+        status != 3
     }
 }
 #[cfg(not(target_os = "macos"))]
-fn check_camera_permission() {
-    return true;
+fn camera_permissions_request_required() -> bool {
+    false
 }
 
 struct CameraClient {
