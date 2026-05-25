@@ -8,6 +8,7 @@
 #![no_std]
 #![no_main]
 
+use cortex_m::asm::wfe;
 use defmt::{info, trace};
 use embassy_executor::Spawner;
 use {defmt_rtt as _, panic_probe as _};
@@ -26,19 +27,28 @@ async fn main(_spawner: Spawner) {
     info!("Input pin PG5 (TIM1_ETR, J408:20)");
     let button = Input::new(p.PG5, Pull::Up);
 
-    loop {
-        info!("Holding FPGA in reset");
-        // hold FPGA in RESET mode
-        fpga_creset_b.set_low();
-
-        info!("Press and release button to start FPGA");
-        wait_for_button_press_release(&button);
-
+    if true {
         info!("Releasing FPGA reset");
         fpga_creset_b.set_high();
 
-        info!("Press and release button to stop FPGA");
-        wait_for_button_press_release(&button);
+        loop {
+            wfe()
+        }
+    } else {
+        loop {
+            info!("Holding FPGA in reset");
+            // hold FPGA in RESET mode
+            fpga_creset_b.set_low();
+
+            info!("Press and release button to start FPGA");
+            wait_for_button_press_release(&button);
+
+            info!("Releasing FPGA reset");
+            fpga_creset_b.set_high();
+
+            info!("Press and release button to stop FPGA");
+            wait_for_button_press_release(&button);
+        }
     }
 }
 
