@@ -3,11 +3,12 @@
 
 use defmt::{error, info};
 use embassy_executor::Spawner;
-use embassy_time::{block_for, Duration};
+use embassy_time::{Duration, Timer};
 use esp_hal::{
     clock::CpuClock,
 };
 use esp_hal::gpio::{Level, Output, OutputConfig};
+use esp_hal::{interrupt::software::SoftwareInterruptControl, timer::timg::TimerGroup};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 #[panic_handler]
@@ -25,8 +26,10 @@ async fn main(_spawner: Spawner) {
         .with_cpu_clock(CpuClock::max())
     );
 
-    //let timg0 = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
+    let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
     //let timer0 = esp_hal::timer::systimer::SystemTimer::new(peripherals.SYSTIMER);
+    esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
     let mut led = Output::new(peripherals.GPIO0, Level::Low, OutputConfig::default());
 
@@ -39,10 +42,9 @@ async fn main(_spawner: Spawner) {
         led.toggle();
         info!("test info");
 
-        // fails, time driver init missing...
-        //Timer::after(Duration::from_micros(250)).await;
+        Timer::after(Duration::from_millis(250)).await;
 
-        block_for(Duration::from_micros(250));
+        //block_for(Duration::from_millis(250));
         error!("test error");
         counter += 1;
     }
