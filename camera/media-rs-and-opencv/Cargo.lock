@@ -2457,7 +2457,8 @@ dependencies = [
  "image",
  "log",
  "media",
- "opencv",
+ "opencv 0.97.2",
+ "opencv 0.98.2",
  "serde",
 ]
 
@@ -3082,7 +3083,26 @@ dependencies = [
  "jobserver",
  "libc",
  "num-traits",
- "opencv-binding-generator",
+ "opencv-binding-generator 0.99.0",
+ "pkg-config",
+ "semver",
+ "shlex",
+ "vcpkg",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "opencv"
+version = "0.98.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c607a407be5ff2484f55d2eb289bffd01de84f962779b8470e76f035dd3563d"
+dependencies = [
+ "cc",
+ "dunce",
+ "jobserver",
+ "libc",
+ "num-traits",
+ "opencv-binding-generator 0.101.0",
  "pkg-config",
  "semver",
  "shlex",
@@ -3095,6 +3115,20 @@ name = "opencv-binding-generator"
 version = "0.99.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b54ac2ccf4af9039b4ddd28d1353a2289688f7e02300eb2d2a8083220d77f29"
+dependencies = [
+ "clang",
+ "clang-sys",
+ "dunce",
+ "percent-encoding",
+ "regex",
+ "shlex",
+]
+
+[[package]]
+name = "opencv-binding-generator"
+version = "0.101.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "833f00c6deee8dd615249af42fa35ff030c5c73ee3c13e44baf1135a4d57af86"
 dependencies = [
  "clang",
  "clang-sys",

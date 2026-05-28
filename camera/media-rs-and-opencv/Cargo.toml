@@ -15,7 +15,7 @@ opencv-411 = [
 
 [dependencies]
 # Computer Vision and Image Processing
-opencv           = { version = "0.97.2", features = ["imgcodecs", "imgproc", "objdetect"], default-features = false, optional = true }
+opencv           = { version = "0.98.2", features = ["imgcodecs", "imgproc", "objdetect"], default-features = false, optional = true }
 # currently need a version of media-rs with linux support (via libcamera 0.6.0)
 media            = { git = "https://github.com/MakerPnP/media-rs", rev = "91a2d8e9bf2f1d5dd0462f7e5dd78222c95412e8" }
 #media           = { path = "../../../media-rs/media" }

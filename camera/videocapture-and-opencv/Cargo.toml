@@ -10,7 +10,7 @@ default = ["opencv-411"]
 
 [dependencies]
 # Computer Vision and Image Processing
-opencv           = { version = "0.97.2", features = ["imgcodecs", "imgproc", "objdetect"], default-features = false }
+opencv           = { version = "0.98.2", features = ["imgcodecs", "imgproc", "objdetect"], default-features = false }
 video-capture    = { version = "0.1.1" }
 #video-capture    = { path = "../../../video-capture" }
 image            = { version = "0.25.8" }
