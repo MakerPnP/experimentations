@@ -9,10 +9,11 @@
 //!   Symbolic link (stable ID): \\?\usb#vid_045e&pid_0294&mi_00#a&2f495d5d&0&0000#{e5323777-f976-4f5b-9b55-b94699c46e44}\global
 //! Device 2: icspring camera
 //!   Symbolic link (stable ID): \\?\usb#vid_32e6&pid_9211&mi_00#9&160b5985&0&0000#{e5323777-f976-4f5b-9b55-b94699c46e44}\global
-//!
+//! ```
 //!
 //! example output after switching the USB ports of the last 2 devices above. the first two IDs are the same but the last is different
 //!
+//! ```not_rust
 //! Device 0: Microsoft® LifeCam Studio(TM)
 //!   Symbolic link (stable ID): \\?\usb#vid_045e&pid_0772&mi_00#a&6e1307a&0&0000#{e5323777-f976-4f5b-9b55-b94699c46e44}\global
 //! Device 1: Video Camera
