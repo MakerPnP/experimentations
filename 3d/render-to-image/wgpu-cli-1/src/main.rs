@@ -1,3 +1,12 @@
+//! Example that creates a basic scene with a .step file and renders it to a .png file using WGPU
+//!
+//! Ignore the .step file rendering code, it won't work for every step file, the main part of this
+//! demo is how to rendering a 3d scene to a buffer and store as a file.
+//!
+//! Running:
+//! ```
+//! run --package wgpu-cli-1 --bin wgpu-cli-1 -- assets/SM04B-SRSS-TB.STEP assets/SM04B-SRSS-TB.png
+//! ```
 use std::collections::HashMap;
 use std::path::Path;
 
