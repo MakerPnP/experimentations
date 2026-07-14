@@ -47,10 +47,8 @@ struct SetConfiguration {
 /// Global tracking file layout used to reload application state between restarts
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 struct AppSessionState {
-    /// Ordered list of active tab set configurations
-    pub sets: Vec<SetConfiguration>,
-    /// File tracking associations for which tab was saved under what configuration path
-    pub config_paths: Vec<Option<PathBuf>>,
+    /// Serialized tree string capturing panel splitting states and tabs natively inside egui_dock
+    pub dock_layout: Option<String>,
 }
 
 #[derive(Clone)]
@@ -62,14 +60,20 @@ struct ParsedDataset {
     columns: HashMap<String, Vec<f64>>,
 }
 
+#[derive(Serialize, Deserialize)]
 struct TrackedFile {
     path: PathBuf,
+    #[serde(skip)]
     dataset: Option<ParsedDataset>,
+    #[serde(skip)]
     error_msg: Option<String>,
+    #[serde(skip)]
     last_modified: Option<SystemTime>,
+    #[serde(skip, default)]
     last_size: u64,
 }
 
+#[derive(Serialize, Deserialize)]
 struct MotionTab {
     tab_name: String,
     files: Vec<TrackedFile>,
@@ -298,10 +302,11 @@ fn run_interactive_gui(args: Args, is_cli_driven: bool) -> Result<(), Box<dyn Er
         ..Default::default()
     };
 
-    let mut initial_tabs = Vec::new();
+    let mut dock_state = DockState::new(Vec::new());
 
     if is_cli_driven {
         // Mode A: Overridden explicit arguments supplied via CLI
+        let mut initial_tabs = Vec::new();
         if !args.files.is_empty() {
             let mut tab = MotionTab::new(args.files.clone());
             for f_name in &args.filters {
@@ -320,14 +325,20 @@ fn run_interactive_gui(args: Args, is_cli_driven: bool) -> Result<(), Box<dyn Er
                 }
             }
         }
+        dock_state = DockState::new(initial_tabs);
     } else if let Some(session) = load_session_state() {
-        // Mode B: Seamless zero-arguments historical resume
-        for (cfg, path) in session.sets.into_iter().zip(session.config_paths.into_iter()) {
-            initial_tabs.push(MotionTab::from_config(cfg, path));
+        // Mode B: Seamless zero-arguments historical resume containing panels and native layouts
+        if let Some(serialized_dock) = session.dock_layout {
+            if let Ok(mut restored_dock) = serde_json::from_str::<DockState<MotionTab>>(&serialized_dock) {
+                // Background parse datasets back into deserialized split layouts
+                for (_, tab) in restored_dock.iter_all_tabs_mut() {
+                    tab.reload_all();
+                }
+                dock_state = restored_dock;
+            }
         }
     }
 
-    let dock_state = DockState::new(initial_tabs);
     let dock_state_shared = Arc::new(Mutex::new(dock_state));
 
     eframe::run_native(
@@ -521,20 +532,13 @@ impl eframe::App for PlotApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // Only update persistent global fallback configuration if the session was launched blindly without args
+        // Only update persistent global session layouts if the app was launched blindly without override args
         if !self.is_cli_driven {
             let dock_state = self.dock_state.lock().unwrap();
-            let mut sets = Vec::new();
-            let mut config_paths = Vec::new();
-
-            for (_, tab) in dock_state.iter_all_tabs() {
-                sets.push(tab.to_config());
-                config_paths.push(tab.associated_config_path.clone());
-            }
+            let serialized_dock = serde_json::to_string(&*dock_state).ok();
 
             let session = AppSessionState {
-                sets,
-                config_paths,
+                dock_layout: serialized_dock,
             };
             save_session_state(&session);
         }
