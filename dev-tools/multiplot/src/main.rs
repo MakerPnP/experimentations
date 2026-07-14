@@ -112,20 +112,15 @@ impl MotionTab {
     }
 
     /// Pulls all column headers from loaded files and initializes them as "enabled" (true) if new.
+    /// Retains existing checkbox configuration state even through transient file-write errors.
     fn rebuild_filters(&mut self) {
-        let mut all_headers = HashSet::new();
         for file in &self.files {
             if let Some(ds) = &file.dataset {
                 for header in &ds.headers {
-                    all_headers.insert(header.clone());
+                    // Only insert if the header is completely new, preserving current state
+                    self.active_filters.entry(header.clone()).or_insert(true);
                 }
             }
-        }
-
-        // Clean out filters no longer present, and insert defaults (true) for new ones
-        self.active_filters.retain(|k, _| all_headers.contains(k));
-        for header in all_headers {
-            self.active_filters.entry(header).or_insert(true);
         }
     }
 
@@ -192,14 +187,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 /// Helper to check if a column is non-decreasing (allowing flat spots, but not completely constant)
 fn is_non_decreasing(data: &[f64]) -> bool {
     if data.len() < 2 { return false; }
-    // Must change overall from start to end, and each step must be >= the previous
     data.first() < data.last() && data.windows(2).all(|w| w[0] <= w[1])
 }
 
 /// Helper to check if a column is non-increasing (allowing flat spots, but not completely constant)
 fn is_non_increasing(data: &[f64]) -> bool {
     if data.len() < 2 { return false; }
-    // Must change overall from start to end, and each step must be <= the previous
     data.first() > data.last() && data.windows(2).all(|w| w[0] >= w[1])
 }
 
@@ -234,7 +227,7 @@ fn parse_dynamic_csv(path: &PathBuf) -> Result<(ParsedDataset, Option<fs::Metada
         }
     }
 
-    // 2. Pure Dynamic Detection: Search all columns for the FIRST monotonic column (no English keywords!)
+    // 2. Dynamic Detection: Search all columns mathematically for the FIRST monotonic column
     let mut x_index = None;
     for (pos, col_data) in parsed_matrix.iter().enumerate() {
         if is_non_decreasing(col_data) || is_non_increasing(col_data) {
@@ -280,6 +273,7 @@ fn parse_dynamic_csv(path: &PathBuf) -> Result<(ParsedDataset, Option<fs::Metada
         metadata,
     ))
 }
+
 fn run_interactive_gui(initial_files: Vec<PathBuf>) -> Result<(), Box<dyn Error>> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
