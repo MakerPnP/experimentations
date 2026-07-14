@@ -1,7 +1,9 @@
 use std::error::Error;
 use std::fs::{self, File};
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use eframe::egui;
@@ -60,7 +62,7 @@ struct TrackedFile {
     last_size: u64,
 }
 
-// One single Tab manages a SET of files
+// Represents one tab containing an active SET of files
 struct MotionTab {
     tab_name: String,
     files: Vec<TrackedFile>,
@@ -121,6 +123,7 @@ impl MotionTab {
         }
     }
 
+    // Returns true if at least one file was modified and reloaded.
     fn poll_for_changes(&mut self) -> bool {
         if !self.auto_reload {
             return false;
@@ -243,26 +246,49 @@ fn run_interactive_gui(initial_files: Vec<PathBuf>) -> Result<(), Box<dyn Error>
         vec![MotionTab::new(initial_files)]
     };
 
-    let dock_state = DockState::new(initial_tabs);
+    let dock_state = Arc::new(Mutex::new(DockState::new(initial_tabs)));
 
     eframe::run_native(
         "S-Curve Profile Workstation",
         options,
-        Box::new(|_cc| {
-            Ok(Box::new(PlotApp {
-                dock_state,
-                show_position: true,
-                show_velocity: true,
-                show_accel: true,
-                show_jerk: true,
-            }))
+        Box::new({
+            let dock_state = Arc::clone(&dock_state);
+            move |cc| {
+                // Spawn a background thread to check files and awaken the UI thread if anything changes
+                let ctx_clone = cc.egui_ctx.clone();
+                let dock_state_clone = Arc::clone(&dock_state);
+                thread::spawn(move || loop {
+                    thread::sleep(Duration::from_millis(250));
+                    let mut needs_repaint = false;
+
+                    if let Ok(mut state) = dock_state_clone.lock() {
+                        for tab in state.iter_all_tabs_mut() {
+                            if tab.1.poll_for_changes() {
+                                needs_repaint = true;
+                            }
+                        }
+                    }
+
+                    if needs_repaint {
+                        ctx_clone.request_repaint();
+                    }
+                });
+
+                Ok(Box::new(PlotApp {
+                    dock_state,
+                    show_position: true,
+                    show_velocity: true,
+                    show_accel: true,
+                    show_jerk: true,
+                }))
+            }
         }),
     )
         .map_err(|e| format!("Failed to run GUI: {:?}", e).into())
 }
 
 struct PlotApp {
-    dock_state: DockState<MotionTab>,
+    dock_state: Arc<Mutex<DockState<MotionTab>>>,
     show_position: bool,
     show_velocity: bool,
     show_accel: bool,
@@ -353,7 +379,6 @@ impl TabViewer for MainTabViewer {
                         .zip(ds.position.iter())
                         .map(|(&x, &y)| [x, y])
                         .collect();
-                    // Corrected Line::new signature for 0.34
                     plot_ui.line(
                         Line::new(format!("Position ({})", ds.filename), pts)
                             .color(pos_color)
@@ -369,7 +394,7 @@ impl TabViewer for MainTabViewer {
                         .map(|(&x, &y)| [x, y])
                         .collect();
                     plot_ui.line(
-                        Line::new(format!("Velocity ({})", ds.filename),pts)
+                        Line::new(format!("Velocity ({})", ds.filename), pts)
                             .color(vel_color)
                             .width(2.0),
                     );
@@ -409,14 +434,7 @@ impl TabViewer for MainTabViewer {
 
 impl eframe::App for PlotApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.request_repaint();
-
-        for tab in self.dock_state.iter_all_tabs_mut() {
-            let changed = tab.1.poll_for_changes();
-            if changed {
-                ctx.request_repaint();
-            }
-        }
+        let mut dock_state = self.dock_state.lock().unwrap();
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -430,7 +448,7 @@ impl eframe::App for PlotApp {
                     {
                         if !files.is_empty() {
                             let new_tab = MotionTab::new(files);
-                            self.dock_state.main_surface_mut().push_to_focused_leaf(new_tab);
+                            dock_state.main_surface_mut().push_to_focused_leaf(new_tab);
                         }
                     }
                 }
@@ -452,7 +470,7 @@ impl eframe::App for PlotApp {
                 show_jerk: self.show_jerk,
             };
 
-            DockArea::new(&mut self.dock_state)
+            DockArea::new(&mut *dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
                 .show_inside(ui, &mut viewer);
         });
