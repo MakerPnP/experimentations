@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::{self, File};
 use std::path::PathBuf;
@@ -11,12 +12,11 @@ use egui::Color32;
 use egui_dock::{DockArea, DockState, TabViewer};
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use plotters::prelude::*;
-use serde::Deserialize;
 
 #[derive(Parser, Debug, Clone)]
-#[command(author, version, about = "Plot and compare S-Curve motion profiles")]
+#[command(author, version, about = "Plot and compare multi-column CSV datasets")]
 struct Args {
-    /// Input CSV files containing motion data
+    /// Input CSV files containing motion or profile data
     #[arg(value_name = "FILES")]
     files: Vec<PathBuf>,
 
@@ -25,33 +25,17 @@ struct Args {
     output: Option<PathBuf>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[serde(rename_all = "PascalCase")]
-struct CsvRow {
-    #[serde(alias = "step")]
-    step: f64,
-    #[serde(alias = "timecycles", alias = "Time")]
-    time_cycles: Option<f64>,
-    #[serde(alias = "intervalcycles", alias = "Interval")]
-    interval_cycles: f64,
-    #[serde(alias = "velocity", alias = "Vel")]
-    velocity: f64,
-    #[serde(alias = "accel", alias = "acceleration")]
-    accel: f64,
-    #[serde(alias = "jerk")]
-    jerk: f64,
-    #[serde(alias = "position", alias = "pos")]
-    position: Option<f64>,
-}
-
 #[derive(Clone)]
 struct ParsedDataset {
     filename: String,
-    time_points: Vec<f64>,
-    position: Vec<f64>,
-    velocity: Vec<f64>,
-    accel: Vec<f64>,
-    jerk: Vec<f64>,
+    /// Header names in insertion order
+    headers: Vec<String>,
+    /// The mapped independent X-axis label used
+    x_header: String,
+    /// X-axis coordinates
+    x_points: Vec<f64>,
+    /// Map of other column headers -> Y values
+    columns: HashMap<String, Vec<f64>>,
 }
 
 struct TrackedFile {
@@ -62,11 +46,13 @@ struct TrackedFile {
     last_size: u64,
 }
 
-// Represents one tab containing an active SET of files
+// One single Tab manages a SET of files and its own plot filters
 struct MotionTab {
     tab_name: String,
     files: Vec<TrackedFile>,
     auto_reload: bool,
+    /// Toggles for every unique column header found in this tab's files
+    active_filters: HashMap<String, bool>,
 }
 
 impl MotionTab {
@@ -100,6 +86,7 @@ impl MotionTab {
                 })
                 .collect(),
             auto_reload: true,
+            active_filters: HashMap::new(),
         };
         tab.reload_all();
         tab
@@ -107,7 +94,7 @@ impl MotionTab {
 
     fn reload_all(&mut self) {
         for file in &mut self.files {
-            match parse_single_csv(&file.path) {
+            match parse_dynamic_csv(&file.path) {
                 Ok((dataset, metadata)) => {
                     file.dataset = Some(dataset);
                     if let Some(meta) = metadata {
@@ -121,9 +108,27 @@ impl MotionTab {
                 }
             }
         }
+        self.rebuild_filters();
     }
 
-    // Returns true if at least one file was modified and reloaded.
+    /// Pulls all column headers from loaded files and initializes them as "enabled" (true) if new.
+    fn rebuild_filters(&mut self) {
+        let mut all_headers = HashSet::new();
+        for file in &self.files {
+            if let Some(ds) = &file.dataset {
+                for header in &ds.headers {
+                    all_headers.insert(header.clone());
+                }
+            }
+        }
+
+        // Clean out filters no longer present, and insert defaults (true) for new ones
+        self.active_filters.retain(|k, _| all_headers.contains(k));
+        for header in all_headers {
+            self.active_filters.entry(header).or_insert(true);
+        }
+    }
+
     fn poll_for_changes(&mut self) -> bool {
         if !self.auto_reload {
             return false;
@@ -136,7 +141,7 @@ impl MotionTab {
                 let current_size = meta.len();
 
                 if current_mod != file.last_modified || current_size != file.last_size {
-                    match parse_single_csv(&file.path) {
+                    match parse_dynamic_csv(&file.path) {
                         Ok((dataset, metadata)) => {
                             file.dataset = Some(dataset);
                             if let Some(m) = metadata {
@@ -152,6 +157,9 @@ impl MotionTab {
                     changed_any = true;
                 }
             }
+        }
+        if changed_any {
+            self.rebuild_filters();
         }
         changed_any
     }
@@ -173,7 +181,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut datasets = Vec::new();
     for path in &args.files {
-        let (ds, _) = parse_single_csv(path)?;
+        let (ds, _) = parse_dynamic_csv(path)?;
         datasets.push(ds);
     }
     render_to_svg(&datasets, &args.output.unwrap())?;
@@ -181,37 +189,78 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn parse_single_csv(path: &PathBuf) -> Result<(ParsedDataset, Option<fs::Metadata>), Box<dyn Error>> {
+/// Parses a CSV dynamically keeping track of all columns.
+fn parse_dynamic_csv(path: &PathBuf) -> Result<(ParsedDataset, Option<fs::Metadata>), Box<dyn Error>> {
     let file = File::open(path)?;
     let metadata = file.metadata().ok();
+
     let mut rdr = csv::ReaderBuilder::new()
         .trim(csv::Trim::All)
         .from_reader(file);
 
-    let mut time_points = Vec::new();
-    let mut position = Vec::new();
-    let mut velocity = Vec::new();
-    let mut accel = Vec::new();
-    let mut jerk = Vec::new();
-    let mut cumulative_cycles = 0.0;
+    let raw_headers = rdr.headers()?.clone();
+    let headers: Vec<String> = raw_headers.iter().map(|s| s.to_string()).collect();
 
-    for result in rdr.deserialize() {
-        let row: CsvRow = result?;
-        let t = match row.time_cycles {
-            Some(t) => t,
-            None => {
-                cumulative_cycles += row.interval_cycles;
-                cumulative_cycles
-            }
-        };
-        let pos = row.position.unwrap_or(row.step);
+    // Determine which column serves as the X-axis (e.g. step, time, cycles)
+    let x_alternatives = ["step", "timecycles", "time", "intervalcycles", "interval", "cycles", "x"];
+    let mut x_header = "Index".to_string();
 
-        time_points.push(t);
-        position.push(pos);
-        velocity.push(row.velocity);
-        accel.push(row.accel);
-        jerk.push(row.jerk);
+    for alt in &x_alternatives {
+        if let Some(matched) = headers.iter().find(|h| h.eq_ignore_ascii_case(alt)) {
+            x_header = matched.clone();
+            break;
+        }
     }
+
+    let mut x_points = Vec::new();
+    let mut columns: HashMap<String, Vec<f64>> = HashMap::new();
+
+    for h in &headers {
+        if h != &x_header {
+            columns.insert(h.clone(), Vec::new());
+        }
+    }
+
+    let mut cumulative_cycles = 0.0;
+    let mut index = 0.0;
+
+    for result in rdr.records() {
+        let record = result?;
+
+        // Match the X-axis coordinate
+        let mut x_val = index;
+        if x_header != "Index" {
+            if let Some(pos) = headers.iter().position(|h| h == &x_header) {
+                if let Some(val_str) = record.get(pos) {
+                    if let Ok(val) = val_str.parse::<f64>() {
+                        if x_header.eq_ignore_ascii_case("intervalcycles") || x_header.eq_ignore_ascii_case("interval") {
+                            cumulative_cycles += val;
+                            x_val = cumulative_cycles;
+                        } else {
+                            x_val = val;
+                        }
+                    }
+                }
+            }
+        }
+        x_points.push(x_val);
+
+        // Fill other column values
+        for (pos, h) in headers.iter().enumerate() {
+            if h != &x_header {
+                let val = record.get(pos)
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                if let Some(vec) = columns.get_mut(h) {
+                    vec.push(val);
+                }
+            }
+        }
+        index += 1.0;
+    }
+
+    // Retain only valid data columns (that aren't serving as our X-axis)
+    let filtered_headers: Vec<String> = headers.into_iter().filter(|h| h != &x_header).collect();
 
     let filename = path
         .file_name()
@@ -222,11 +271,10 @@ fn parse_single_csv(path: &PathBuf) -> Result<(ParsedDataset, Option<fs::Metadat
     Ok((
         ParsedDataset {
             filename,
-            time_points,
-            position,
-            velocity,
-            accel,
-            jerk,
+            headers: filtered_headers,
+            x_header,
+            x_points,
+            columns,
         },
         metadata,
     ))
@@ -236,7 +284,7 @@ fn run_interactive_gui(initial_files: Vec<PathBuf>) -> Result<(), Box<dyn Error>
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])
-            .with_title("S-Curve Workstation"),
+            .with_title("Dynamic CSV Docking Workstation"),
         ..Default::default()
     };
 
@@ -249,12 +297,11 @@ fn run_interactive_gui(initial_files: Vec<PathBuf>) -> Result<(), Box<dyn Error>
     let dock_state = Arc::new(Mutex::new(DockState::new(initial_tabs)));
 
     eframe::run_native(
-        "S-Curve Profile Workstation",
+        "Dynamic CSV Docking Workstation",
         options,
         Box::new({
             let dock_state = Arc::clone(&dock_state);
             move |cc| {
-                // Spawn a background thread to check files and awaken the UI thread if anything changes
                 let ctx_clone = cc.egui_ctx.clone();
                 let dock_state_clone = Arc::clone(&dock_state);
                 thread::spawn(move || loop {
@@ -274,13 +321,7 @@ fn run_interactive_gui(initial_files: Vec<PathBuf>) -> Result<(), Box<dyn Error>
                     }
                 });
 
-                Ok(Box::new(PlotApp {
-                    dock_state,
-                    show_position: true,
-                    show_velocity: true,
-                    show_accel: true,
-                    show_jerk: true,
-                }))
+                Ok(Box::new(PlotApp { dock_state }))
             }
         }),
     )
@@ -289,18 +330,9 @@ fn run_interactive_gui(initial_files: Vec<PathBuf>) -> Result<(), Box<dyn Error>
 
 struct PlotApp {
     dock_state: Arc<Mutex<DockState<MotionTab>>>,
-    show_position: bool,
-    show_velocity: bool,
-    show_accel: bool,
-    show_jerk: bool,
 }
 
-struct MainTabViewer {
-    show_position: bool,
-    show_velocity: bool,
-    show_accel: bool,
-    show_jerk: bool,
-}
+struct MainTabViewer;
 
 impl TabViewer for MainTabViewer {
     type Tab = MotionTab;
@@ -311,11 +343,11 @@ impl TabViewer for MainTabViewer {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         ui.horizontal(|ui| {
-            if ui.button("🔄 Refresh All Set").on_hover_text("Manually reload all files in this tab").clicked() {
+            if ui.button("🔄 Refresh All Set").clicked() {
                 tab.reload_all();
             }
 
-            ui.checkbox(&mut tab.auto_reload, "Auto-reload on changes");
+            ui.checkbox(&mut tab.auto_reload, "Auto-reload");
 
             let newest_time = tab.files.iter()
                 .filter_map(|f| f.last_modified)
@@ -324,6 +356,23 @@ impl TabViewer for MainTabViewer {
             if let Some(m) = newest_time {
                 if let Ok(elapsed) = m.elapsed() {
                     ui.weak(format!("(Updated: {}s ago)", elapsed.as_secs()));
+                }
+            }
+        });
+
+        ui.separator();
+
+        // 1. Draw localized Combined Tab Checkboxes
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Display Columns:");
+
+            // Sort column list alphabetically by cloning the keys to avoid borrow conflicts
+            let mut sorted_filters: Vec<String> = tab.active_filters.keys().cloned().collect();
+            sorted_filters.sort();
+
+            for header in &sorted_filters {
+                if let Some(checked) = tab.active_filters.get_mut(header) {
+                    ui.checkbox(checked, header);
                 }
             }
         });
@@ -350,82 +399,48 @@ impl TabViewer for MainTabViewer {
             return;
         }
 
+        // Determine unified X-Axis label representing this dataset's main timeline coordinate
+        let x_axis_label = parsed_sets.first().map(|d| d.x_header.as_str()).unwrap_or("X Axis");
+
         let plot = Plot::new(format!("plot_group_{}", tab.tab_name))
             .legend(Legend::default().position(egui_plot::Corner::LeftTop))
-            .x_axis_label("Time (Cycles)")
+            .x_axis_label(x_axis_label)
             .y_axis_label("Value");
 
         plot.show(ui, |plot_ui| {
             let num_files = parsed_sets.len();
 
-            for (i, ds) in parsed_sets.into_iter().enumerate() {
-                let hue = i as f32 / num_files as f32;
+            for (file_idx, ds) in parsed_sets.into_iter().enumerate() {
+                // Hue base shifts per file inside this tab so lines are visually separate
+                let hue = file_idx as f32 / num_files as f32;
                 let saturation = 0.85;
 
-                let get_color = |brightness: f32| {
-                    let hsva = egui::ecolor::Hsva::new(hue, saturation, brightness, 1.0);
-                    Color32::from(hsva)
-                };
+                // Unique brightness steps for different columns in a file
+                let num_columns = ds.headers.len();
 
-                let pos_color = get_color(0.35);
-                let vel_color = get_color(0.55);
-                let acc_color = get_color(0.75);
-                let jrk_color = get_color(0.90);
+                for (col_idx, header) in ds.headers.iter().enumerate() {
+                    // Check if this combined checkbox is enabled for this tab
+                    if let Some(&true) = tab.active_filters.get(header) {
+                        if let Some(y_points) = ds.columns.get(header) {
+                            let pts: PlotPoints = ds
+                                .x_points
+                                .iter()
+                                .zip(y_points.iter())
+                                .map(|(&x, &y)| [x, y])
+                                .collect();
 
-                if self.show_position {
-                    let pts: PlotPoints = ds
-                        .time_points
-                        .iter()
-                        .zip(ds.position.iter())
-                        .map(|(&x, &y)| [x, y])
-                        .collect();
-                    plot_ui.line(
-                        Line::new(format!("Position ({})", ds.filename), pts)
-                            .color(pos_color)
-                            .width(2.0),
-                    );
-                }
+                            // Spread brightness/value depending on the column index
+                            let val_brightness = 0.35 + (col_idx as f32 / num_columns.max(1) as f32) * 0.55;
+                            let hsva = egui::ecolor::Hsva::new(hue, saturation, val_brightness, 1.0);
+                            let color = Color32::from(hsva);
 
-                if self.show_velocity {
-                    let pts: PlotPoints = ds
-                        .time_points
-                        .iter()
-                        .zip(ds.velocity.iter())
-                        .map(|(&x, &y)| [x, y])
-                        .collect();
-                    plot_ui.line(
-                        Line::new(format!("Velocity ({})", ds.filename), pts)
-                            .color(vel_color)
-                            .width(2.0),
-                    );
-                }
-
-                if self.show_accel {
-                    let pts: PlotPoints = ds
-                        .time_points
-                        .iter()
-                        .zip(ds.accel.iter())
-                        .map(|(&x, &y)| [x, y])
-                        .collect();
-                    plot_ui.line(
-                        Line::new(format!("Accel ({})", ds.filename), pts)
-                            .color(acc_color)
-                            .width(2.0),
-                    );
-                }
-
-                if self.show_jerk {
-                    let pts: PlotPoints = ds
-                        .time_points
-                        .iter()
-                        .zip(ds.jerk.iter())
-                        .map(|(&x, &y)| [x, y])
-                        .collect();
-                    plot_ui.line(
-                        Line::new(format!("Jerk ({})", ds.filename), pts)
-                            .color(jrk_color)
-                            .width(2.0),
-                    );
+                            plot_ui.line(
+                                Line::new(format!("{} ({})", header, ds.filename), pts)
+                                    .color(color)
+                                    .width(2.0),
+                            );
+                        }
+                    }
                 }
             }
         });
@@ -438,12 +453,12 @@ impl eframe::App for PlotApp {
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("S-Curve Docking Workstation");
+                ui.heading("CSV Plotter");
                 ui.separator();
 
                 if ui.button("📂 Open CSV Set...").on_hover_text("Open a set of CSVs to display inside a single new tab").clicked() {
                     if let Some(files) = rfd::FileDialog::new()
-                        .add_filter("CSV Motion Data", &["csv"])
+                        .add_filter("CSV Data", &["csv"])
                         .pick_files()
                     {
                         if !files.is_empty() {
@@ -452,23 +467,11 @@ impl eframe::App for PlotApp {
                         }
                     }
                 }
-
-                ui.separator();
-                ui.label("Global Filters:");
-                ui.checkbox(&mut self.show_position, "Position");
-                ui.checkbox(&mut self.show_velocity, "Velocity");
-                ui.checkbox(&mut self.show_accel, "Acceleration");
-                ui.checkbox(&mut self.show_jerk, "Jerk");
             });
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let mut viewer = MainTabViewer {
-                show_position: self.show_position,
-                show_velocity: self.show_velocity,
-                show_accel: self.show_accel,
-                show_jerk: self.show_jerk,
-            };
+            let mut viewer = MainTabViewer;
 
             DockArea::new(&mut *dock_state)
                 .style(egui_dock::Style::from_egui(ui.style().as_ref()))
@@ -488,18 +491,15 @@ fn render_to_svg(datasets: &[ParsedDataset], output_path: &PathBuf) -> Result<()
     let mut y_max = f64::NEG_INFINITY;
 
     for ds in datasets {
-        for &x in &ds.time_points {
+        for &x in &ds.x_points {
             if x < x_min { x_min = x; }
             if x > x_max { x_max = x; }
         }
-        let all_ys = ds.position.iter()
-            .chain(&ds.velocity)
-            .chain(&ds.accel)
-            .chain(&ds.jerk);
-
-        for &y in all_ys {
-            if y < y_min { y_min = y; }
-            if y > y_max { y_max = y; }
+        for vec in ds.columns.values() {
+            for &y in vec {
+                if y < y_min { y_min = y; }
+                if y > y_max { y_max = y; }
+            }
         }
     }
 
@@ -510,8 +510,10 @@ fn render_to_svg(datasets: &[ParsedDataset], output_path: &PathBuf) -> Result<()
     let root = SVGBackend::new(output_path, (1200, 800)).into_drawing_area();
     root.fill(&WHITE)?;
 
+    let x_axis_label = datasets.first().map(|d| d.x_header.as_str()).unwrap_or("X Axis");
+
     let mut chart = ChartBuilder::on(&root)
-        .caption("Multi-profile S-Curve Comparison", ("sans-serif", 24))
+        .caption("Multi-profile CSV Comparison", ("sans-serif", 24))
         .margin(15)
         .x_label_area_size(50)
         .y_label_area_size(60)
@@ -519,48 +521,30 @@ fn render_to_svg(datasets: &[ParsedDataset], output_path: &PathBuf) -> Result<()
 
     chart
         .configure_mesh()
-        .x_desc("Time (Cycles)")
+        .x_desc(x_axis_label)
         .y_desc("Value")
         .draw()?;
 
     let num_files = datasets.len();
 
-    for (i, ds) in datasets.iter().enumerate() {
-        let hue = i as f64 / num_files as f64;
+    for (file_idx, ds) in datasets.iter().enumerate() {
+        let hue = file_idx as f64 / num_files as f64;
         let saturation = 0.85;
+        let num_columns = ds.headers.len();
 
-        let pos_color = HSLColor(hue, saturation, 0.25);
-        let vel_color = HSLColor(hue, saturation, 0.42);
-        let acc_color = HSLColor(hue, saturation, 0.60);
-        let jrk_color = HSLColor(hue, saturation, 0.78);
+        for (col_idx, header) in ds.headers.iter().enumerate() {
+            if let Some(y_points) = ds.columns.get(header) {
+                let val_brightness = 0.25 + (col_idx as f64 / num_columns.max(1) as f64) * 0.55;
+                let color = HSLColor(hue, saturation, val_brightness);
 
-        chart.draw_series(LineSeries::new(
-            ds.time_points.iter().cloned().zip(ds.position.iter().cloned()),
-            pos_color.stroke_width(2),
-        ))?
-            .label(format!("Position ({})", ds.filename))
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], pos_color.stroke_width(2)));
-
-        chart.draw_series(LineSeries::new(
-            ds.time_points.iter().cloned().zip(ds.velocity.iter().cloned()),
-            vel_color.stroke_width(2),
-        ))?
-            .label(format!("Velocity ({})", ds.filename))
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], vel_color.stroke_width(2)));
-
-        chart.draw_series(LineSeries::new(
-            ds.time_points.iter().cloned().zip(ds.accel.iter().cloned()),
-            acc_color.stroke_width(2),
-        ))?
-            .label(format!("Accel ({})", ds.filename))
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], acc_color.stroke_width(2)));
-
-        chart.draw_series(LineSeries::new(
-            ds.time_points.iter().cloned().zip(ds.jerk.iter().cloned()),
-            jrk_color.stroke_width(2),
-        ))?
-            .label(format!("Jerk ({})", ds.filename))
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], jrk_color.stroke_width(2)));
+                chart.draw_series(LineSeries::new(
+                    ds.x_points.iter().cloned().zip(y_points.iter().cloned()),
+                    color.stroke_width(2),
+                ))?
+                    .label(format!("{} ({})", header, ds.filename))
+                    .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color.stroke_width(2)));
+            }
+        }
     }
 
     chart
