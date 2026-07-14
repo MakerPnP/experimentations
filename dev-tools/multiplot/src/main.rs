@@ -189,7 +189,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Parses a CSV dynamically keeping track of all columns.
+/// Helper to check if a column is non-decreasing (allowing flat spots, but not completely constant)
+fn is_non_decreasing(data: &[f64]) -> bool {
+    if data.len() < 2 { return false; }
+    // Must change overall from start to end, and each step must be >= the previous
+    data.first() < data.last() && data.windows(2).all(|w| w[0] <= w[1])
+}
+
+/// Helper to check if a column is non-increasing (allowing flat spots, but not completely constant)
+fn is_non_increasing(data: &[f64]) -> bool {
+    if data.len() < 2 { return false; }
+    // Must change overall from start to end, and each step must be <= the previous
+    data.first() > data.last() && data.windows(2).all(|w| w[0] >= w[1])
+}
+
+/// Parses a CSV dynamically, detecting the independent X-axis by scanning for a monotonic sequence.
 fn parse_dynamic_csv(path: &PathBuf) -> Result<(ParsedDataset, Option<fs::Metadata>), Box<dyn Error>> {
     let file = File::open(path)?;
     let metadata = file.metadata().ok();
@@ -201,66 +215,53 @@ fn parse_dynamic_csv(path: &PathBuf) -> Result<(ParsedDataset, Option<fs::Metada
     let raw_headers = rdr.headers()?.clone();
     let headers: Vec<String> = raw_headers.iter().map(|s| s.to_string()).collect();
 
-    // Determine which column serves as the X-axis (e.g. step, time, cycles)
-    let x_alternatives = ["step", "timecycles", "time", "intervalcycles", "interval", "cycles", "x"];
-    let mut x_header = "Index".to_string();
+    // 1. Read all rows into memory to analyze trends and populate columns
+    let records: Vec<csv::StringRecord> = rdr.into_records().collect::<Result<_, _>>()?;
 
-    for alt in &x_alternatives {
-        if let Some(matched) = headers.iter().find(|h| h.eq_ignore_ascii_case(alt)) {
-            x_header = matched.clone();
+    if records.is_empty() {
+        return Err("CSV file contains no data rows".into());
+    }
+
+    // Temporary matrix to parse all columns as float datasets
+    let mut parsed_matrix: Vec<Vec<f64>> = vec![Vec::with_capacity(records.len()); headers.len()];
+
+    for record in &records {
+        for (pos, _) in headers.iter().enumerate() {
+            let val = record.get(pos)
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            parsed_matrix[pos].push(val);
+        }
+    }
+
+    // 2. Pure Dynamic Detection: Search all columns for the FIRST monotonic column (no English keywords!)
+    let mut x_index = None;
+    for (pos, col_data) in parsed_matrix.iter().enumerate() {
+        if is_non_decreasing(col_data) || is_non_increasing(col_data) {
+            x_index = Some(pos);
             break;
         }
     }
 
-    let mut x_points = Vec::new();
-    let mut columns: HashMap<String, Vec<f64>> = HashMap::new();
+    // Fallback: If no column is strictly monotonic, generate a neutral mock timeline
+    let (x_header, x_points, final_x_idx) = match x_index {
+        Some(idx) => (headers[idx].clone(), parsed_matrix[idx].clone(), Some(idx)),
+        None => {
+            let index_points: Vec<f64> = (0..records.len()).map(|i| i as f64).collect();
+            ("Row Index".to_string(), index_points, None)
+        }
+    };
 
-    for h in &headers {
-        if h != &x_header {
-            columns.insert(h.clone(), Vec::new());
+    // 3. Separate remaining columns into the Y-axis column map
+    let mut columns = HashMap::new();
+    let mut filtered_headers = Vec::new();
+
+    for (pos, header) in headers.into_iter().enumerate() {
+        if Some(pos) != final_x_idx {
+            filtered_headers.push(header.clone());
+            columns.insert(header, parsed_matrix[pos].clone());
         }
     }
-
-    let mut cumulative_cycles = 0.0;
-    let mut index = 0.0;
-
-    for result in rdr.records() {
-        let record = result?;
-
-        // Match the X-axis coordinate
-        let mut x_val = index;
-        if x_header != "Index" {
-            if let Some(pos) = headers.iter().position(|h| h == &x_header) {
-                if let Some(val_str) = record.get(pos) {
-                    if let Ok(val) = val_str.parse::<f64>() {
-                        if x_header.eq_ignore_ascii_case("intervalcycles") || x_header.eq_ignore_ascii_case("interval") {
-                            cumulative_cycles += val;
-                            x_val = cumulative_cycles;
-                        } else {
-                            x_val = val;
-                        }
-                    }
-                }
-            }
-        }
-        x_points.push(x_val);
-
-        // Fill other column values
-        for (pos, h) in headers.iter().enumerate() {
-            if h != &x_header {
-                let val = record.get(pos)
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(0.0);
-                if let Some(vec) = columns.get_mut(h) {
-                    vec.push(val);
-                }
-            }
-        }
-        index += 1.0;
-    }
-
-    // Retain only valid data columns (that aren't serving as our X-axis)
-    let filtered_headers: Vec<String> = headers.into_iter().filter(|h| h != &x_header).collect();
 
     let filename = path
         .file_name()
@@ -279,7 +280,6 @@ fn parse_dynamic_csv(path: &PathBuf) -> Result<(ParsedDataset, Option<fs::Metada
         metadata,
     ))
 }
-
 fn run_interactive_gui(initial_files: Vec<PathBuf>) -> Result<(), Box<dyn Error>> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
