@@ -284,7 +284,7 @@ fn run_interactive_gui(initial_files: Vec<PathBuf>) -> Result<(), Box<dyn Error>
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])
-            .with_title("Dynamic CSV Docking Workstation"),
+            .with_title("Multi-plot"),
         ..Default::default()
     };
 
@@ -297,7 +297,7 @@ fn run_interactive_gui(initial_files: Vec<PathBuf>) -> Result<(), Box<dyn Error>
     let dock_state = Arc::new(Mutex::new(DockState::new(initial_tabs)));
 
     eframe::run_native(
-        "Dynamic CSV Docking Workstation",
+        "Multi-plot",
         options,
         Box::new({
             let dock_state = Arc::clone(&dock_state);
@@ -453,7 +453,7 @@ impl eframe::App for PlotApp {
 
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("CSV Plotter");
+                ui.heading("Multi-plot");
                 ui.separator();
 
                 if ui.button("📂 Open CSV Set...").on_hover_text("Open a set of CSVs to display inside a single new tab").clicked() {
@@ -513,7 +513,7 @@ fn render_to_svg(datasets: &[ParsedDataset], output_path: &PathBuf) -> Result<()
     let x_axis_label = datasets.first().map(|d| d.x_header.as_str()).unwrap_or("X Axis");
 
     let mut chart = ChartBuilder::on(&root)
-        .caption("Multi-profile CSV Comparison", ("sans-serif", 24))
+        .caption("CSV Comparison", ("sans-serif", 24))
         .margin(15)
         .x_label_area_size(50)
         .y_label_area_size(60)
